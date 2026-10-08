@@ -1,0 +1,63 @@
+name: glm53
+services:
+  download:
+    image: vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+    profiles: [prepare]
+    entrypoint: [python3, -c]
+    command:
+      - "from huggingface_hub import snapshot_download; print(snapshot_download('zai-org/GLM-5.3', max_workers=16))"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_XET_HIGH_PERFORMANCE: '1'
+    volumes:
+      - ${GLM_DATA_DIR:?required}/hf-cache:/root/.cache/huggingface
+  vllm:
+    image: vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+    restart: unless-stopped
+    gpus: all
+    ipc: host
+    ulimits:
+      memlock: {soft: -1, hard: -1}
+      stack: {soft: 67108864, hard: 67108864}
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      VLLM_ENGINE_READY_TIMEOUT_S: '7200'
+      VLLM_USE_RUST_FRONTEND: '1'
+    command:
+      - zai-org/GLM-5.3
+      - --kv-cache-dtype
+      - fp8_e4m3
+      - --tensor-parallel-size
+      - '8'
+      - --tool-call-parser
+      - glm47
+      - --enable-auto-tool-choice
+      - --reasoning-parser
+      - glm47
+    volumes:
+      - ${GLM_DATA_DIR:?required}/runtime-cache:/root/.cache
+      - ${GLM_DATA_DIR:?required}/hf-cache:/root/.cache/huggingface
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 480
+    logging:
+      options: {max-size: 50m, max-file: '3'}
+  proxy:
+    build: .
+    restart: unless-stopped
+    environment:
+      MODEL_FAMILY: glm
+      UPSTREAM_URL: http://vllm:8000
+    ports:
+      - '${GLM_BIND_ADDRESS:-0.0.0.0}:${GLM_PORT:-8000}:8000'
+    depends_on:
+      vllm: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 480
+    logging:
+      options: {max-size: 50m, max-file: '3'}
